@@ -200,14 +200,56 @@
     .wc-note { font-size: .62rem; color: var(--text-muted); }
 
     /* ══ Modals ══ */
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; backdrop-filter: blur(4px); }
-    .modal { background: var(--card-bg); border-radius: 14px; width: 100%; max-width: 540px; box-shadow: var(--shadow-lg); overflow: hidden; max-height: 92vh; display: flex; flex-direction: column; border: 1.5px solid var(--border-glow); }
+
+    /* ① body スクロールロック — モーダル表示中は背景を固定 */
+    body.modal-open { overflow: hidden; }
+
+    /* ② オーバーレイ — 自身ではスクロールしない */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.8);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; padding: 16px;
+      backdrop-filter: blur(4px);
+      overscroll-behavior: contain;   /* 背景への伝播を遮断 */
+    }
+
+    /* ③ モーダル本体 — 高さを画面内に収め、子要素でスクロール */
+    .modal {
+      background: var(--card-bg);
+      border-radius: 14px;
+      width: 100%; max-width: 540px;
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+      /* dvh 対応ブラウザは dvh、非対応は vh にフォールバック */
+      max-height: 85vh;
+      max-height: 85dvh;
+      display: flex; flex-direction: column;
+      border: 1.5px solid var(--border-glow);
+    }
     .modal-sm { max-width: 380px; }
-    .modal-header { background: linear-gradient(135deg,#1d002e,#2a0040); color: var(--text); padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+
+    /* ④ ヘッダー/フッターは固定、ボディだけ内部スクロール */
+    .modal-header {
+      background: linear-gradient(135deg,#1d002e,#2a0040);
+      color: var(--text); padding: 16px 20px;
+      display: flex; justify-content: space-between; align-items: center;
+      flex-shrink: 0;                 /* 絶対に縮まない */
+      border-bottom: 1px solid var(--border);
+    }
     .modal-header h2 { font-size: 1rem; font-weight: 700; }
     .modal-close { background: none; border: none; color: var(--text-dim); font-size: 1.2rem; cursor: pointer; opacity: .8; line-height: 1; }
     .modal-close:hover { opacity: 1; color: var(--pink); }
-    .modal-body { padding: 20px; overflow-y: auto; }
+
+    .modal-body {
+      padding: 20px;
+      flex: 1 1 auto;                 /* 残りスペースをすべて使う */
+      overflow-y: auto;               /* ここだけスクロール */
+      -webkit-overflow-scrolling: touch; /* iOS慣性スクロール */
+      overscroll-behavior: contain;   /* 親へのスクロール伝播を止める */
+      padding-bottom: 40px;           /* iOS下部メニューバー対策の余白 */
+    }
+
     .form-group { margin-bottom: 14px; }
     label { display: block; font-size: .8rem; font-weight: 600; color: var(--text-dim); margin-bottom: 4px; }
     .form-control { width: 100%; padding: 9px 12px; border: 1.5px solid var(--border); border-radius: 8px; font-size: .9rem; outline: none; transition: border-color .15s; font-family: inherit; background: var(--surface); color: var(--text); }
@@ -217,7 +259,17 @@
     .form-section-label { font-size: .72rem; font-weight: 700; letter-spacing: .7px; padding: 6px 10px; border-radius: 6px; margin: 16px 0 10px; display: block; }
     .form-section-label.en { background: var(--purple-pale); color: var(--purple); }
     .form-section-label.es { background: var(--es-bg); color: var(--es-accent); border: 1px solid var(--es-border); }
-    .modal-footer { padding: 12px 20px 20px; display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0; }
+
+    /* ⑤ フッター（保存ボタン行）— 常に画面内に固定表示 */
+    .modal-footer {
+      padding: 12px 20px;
+      /* Safe Area（iPhone ホームインジケーター）分の余白を追加 */
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+      display: flex; justify-content: flex-end; gap: 10px;
+      flex-shrink: 0;                 /* 絶対に縮まない */
+      border-top: 1px solid var(--border);
+      background: var(--card-bg);    /* body scroll 時に透けない */
+    }
     .btn-cancel { padding: 8px 18px; border: 1.5px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; font-size: .88rem; color: var(--text-dim); }
     .btn-cancel:hover { border-color: var(--purple); color: var(--purple); }
     .btn-save { padding: 8px 22px; background: linear-gradient(135deg,var(--purple-dim),var(--pink-dim)); color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: .88rem; font-weight: 700; box-shadow: var(--glow-purple); }
@@ -284,8 +336,18 @@
       .translate-body { grid-template-columns: 1fr; }
       .translate-divider { border-left: none; border-right: none; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); height: 36px; padding: 0; }
       .translate-arrow-icon { transform: rotate(90deg); }
-      .modal { border-radius: 18px 18px 0 0; max-height: 95vh; position: fixed; bottom: 0; left: 0; right: 0; width: 100%; }
-      .modal-overlay { align-items: flex-end; }
+      /* スマホ：ボトムシート形式。dvh で仮想キーボード分を正確に除外 */
+      .modal {
+        border-radius: 18px 18px 0 0;
+        max-height: 92vh;
+        max-height: 92dvh;            /* dvh 対応ブラウザ優先 */
+        position: fixed; bottom: 0; left: 0; right: 0; width: 100%;
+      }
+      .modal-overlay { align-items: flex-end; padding: 0; }
+      /* フッターの Safe Area 余白をモバイルで最大化 */
+      .modal-footer {
+        padding-bottom: max(40px, env(safe-area-inset-bottom));
+      }
     }
   </style>
 </head>
@@ -1177,6 +1239,20 @@ Japanese input: "${jaText}"`;
   }
 
   /* ══ MAIN APP ══ */
+  /* ══ body スクロールロック ══
+     モーダルが1つでも開いている間は body.modal-open を付与し
+     背景コンテンツのスクロールを完全に止める               */
+  function useBodyScrollLock(locked) {
+    useEffect(() => {
+      if (locked) {
+        document.body.classList.add("modal-open");
+      } else {
+        document.body.classList.remove("modal-open");
+      }
+      return () => document.body.classList.remove("modal-open");
+    }, [locked]);
+  }
+
   function App() {
     const [phrases,     setPhrases]     = useState(INITIAL_PHRASES);
     const [customCats,  setCustomCats]  = useState([]);
@@ -1189,6 +1265,10 @@ Japanese input: "${jaText}"`;
     const [detailPhrase,setDetailPhrase]= useState(null);
     const [showCatAdd,  setShowCatAdd]  = useState(false);
     const [showSettings,setShowSettings]= useState(false);
+
+    /* いずれかのモーダルが開いていれば body スクロールを止める */
+    const anyModalOpen = showAdd || !!detailPhrase || showCatAdd || showSettings;
+    useBodyScrollLock(anyModalOpen);
 
     const { speakingId, speak, voiceName, voiceNameEs } = useSpeech();
     const hasKey = !!(localStorage.getItem("openai_api_key") || "").trim();
