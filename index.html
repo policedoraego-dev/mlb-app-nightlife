@@ -401,30 +401,44 @@
       };
     },
     async upsertPhrase(p) {
-      if (!sb) return;
+      if (!sb) return { error: new Error("Supabase クライアント未初期化") };
       const row = this._toRow(p);
       /* セーフガード */
       if (!row.words || row.words.length === 0)
         row.words = (row.phrase || "").split(/\s+/).filter(Boolean).map(w => ({ w, m: "", r: "", note: "" }));
       if (!row.words_es || row.words_es.length === 0)
         row.words_es = (row.phrase_es || "").split(/\s+/).filter(Boolean).map(w => ({ w, m: "", r: "", note: "" }));
-      if (!row.ipa && row.phrase)    row.ipa    = "/" + row.phrase    + "/";
+      if (!row.ipa && row.phrase)       row.ipa    = "/" + row.phrase    + "/";
       if (!row.ipa_es && row.phrase_es) row.ipa_es = "/" + row.phrase_es + "/";
-      const { error } = await sb.from(TABLE_NAME).upsert(row);
-      if (error) console.warn("[Supabase] upsertPhrase:", error.message);
+      try {
+        const { error } = await sb.from(TABLE_NAME).upsert(row);
+        if (error) console.warn("[Supabase] upsertPhrase:", error.message);
+        return { error: error || null };
+      } catch (e) {
+        console.warn("[Supabase] upsertPhrase exception:", e);
+        return { error: e };
+      }
     },
     async deletePhrase(id) {
       if (!sb) return;
-      const { error } = await sb.from(TABLE_NAME).delete().eq("id", id);
-      if (error) console.warn("[Supabase] deletePhrase:", error.message);
+      try {
+        const { error } = await sb.from(TABLE_NAME).delete().eq("id", id);
+        if (error) console.warn("[Supabase] deletePhrase:", error.message);
+      } catch (e) { console.warn("[Supabase] deletePhrase exception:", e); }
     },
     async upsertCategory(c) {
-      if (!sb) return;
-      await sb.from("categories_nightlife").upsert({ key: c.key, label: c.label, palette_idx: c.paletteIdx, built_in: false, sort_order: 100 }).catch(() => {});
+      if (!sb) return { error: new Error("Supabase クライアント未初期化") };
+      try {
+        const { error } = await sb.from("categories_nightlife")
+          .upsert({ key: c.key, label: c.label, palette_idx: c.paletteIdx, built_in: false, sort_order: 100 });
+        return { error: error || null };
+      } catch (e) { return { error: e }; }
     },
     async deleteCategory(key) {
       if (!sb) return;
-      await sb.from("categories_nightlife").delete().eq("key", key).catch(() => {});
+      try {
+        await sb.from("categories_nightlife").delete().eq("key", key);
+      } catch (e) { console.warn("[Supabase] deleteCategory exception:", e); }
     },
   };
 
@@ -1275,7 +1289,9 @@ Japanese input: "${jaText}"`;
     const [detailPhrase,setDetailPhrase]= useState(null);
     const [showCatAdd,  setShowCatAdd]  = useState(false);
     const [showSettings,setShowSettings]= useState(false);
-    const [saveError,   setSaveError]   = useState(""); // Supabase失敗時のトースト
+    const [saveError,   setSaveError]   = useState("");
+    // "checking" | "ok" | "error"
+    const [dbStatus,    setDbStatus]    = useState("checking");
 
     /* いずれかのモーダルが開いていれば body スクロールを止める */
     const anyModalOpen = showAdd || !!detailPhrase || showCatAdd || showSettings;
@@ -1285,13 +1301,18 @@ Japanese input: "${jaText}"`;
     const hasKey = !!(localStorage.getItem("openai_api_key") || "").trim();
 
     useEffect(() => {
-      if (!db.ready || dbLoaded) return;
+      if (!db.ready) { setDbStatus("error"); return; }
+      if (dbLoaded)  return;
       db.loadAll().then(data => {
-        if (!data) return;
+        if (!data) { setDbStatus("error"); return; }
+        setDbStatus("ok");
         setDbLoaded(true);
-        if (data.phrases.length > 0) setPhrases(data.phrases);
+        if (data.phrases.length    > 0) setPhrases(data.phrases);
         if (data.customCats.length > 0) setCustomCats(data.customCats);
-      }).catch(console.warn);
+      }).catch(e => {
+        console.warn("[loadAll]", e);
+        setDbStatus("error");
+      });
     }, []);
 
     useEffect(() => {
@@ -1320,30 +1341,31 @@ Japanese input: "${jaText}"`;
       return list;
     }, [phrases, filterCat, search]);
 
-    /* Supabase への保存。エラー時はトーストで通知 */
+    /* Supabase への保存。sb クライアントを直接使い、エラーは必ずトーストで表示 */
+    const showError = useCallback((msg) => {
+      setSaveError(msg);
+      setTimeout(() => setSaveError(""), 8000);
+    }, []);
+
     const savePhrase = useCallback(async (p) => {
-      const now = Date.now();
-      const id  = p.id || now;
+      const id     = p.id || Date.now();
       const record = { ...p, id };
-      const updated = p.id
-        ? phrases.map(x => x.id === p.id ? record : x)
-        : [...phrases, record];
-      setPhrases(updated);
-      // Supabase 保存（失敗してもUIは維持し、エラーをトーストで表示）
-      if (db.ready) {
-        const row = db._toRow(record);
-        const { error } = await (async () => {
-          try { return await window.supabase
-            .createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-            .from(TABLE_NAME).upsert(row);
-          } catch (e) { return { error: e }; }
-        })();
-        if (error) {
-          setSaveError(`⚠ Supabase 保存失敗: ${error.message || error}。テーブルが作成済みか確認してください。`);
-          setTimeout(() => setSaveError(""), 6000);
-        }
+      const isNew  = !p.id;
+      /* ① 先に UI を更新（楽観的更新） */
+      setPhrases(prev => isNew
+        ? [...prev, record]
+        : prev.map(x => x.id === p.id ? record : x)
+      );
+      /* ② Supabase に保存 */
+      if (!db.ready) {
+        showError("⚠ Supabase 未接続 — ページ再読み込み後にデータが消えます。接続設定を確認してください。");
+        return;
       }
-    }, [phrases]);
+      const { error } = await db.upsertPhrase(record);
+      if (error) {
+        showError(`⚠ 保存失敗: ${error.message || String(error)} — supabase_setup.sql を Supabase の SQL Editor で実行済みか確認してください。`);
+      }
+    }, [phrases, showError]);
 
     /* 翻訳パネル完了 → 編集モーダルを開く（カテゴリー等を確認してから保存） */
     const handleTranslationDone = useCallback(({ ja, en, ipa, words, es, ipa_es, words_es, nuance }) => {
@@ -1376,8 +1398,9 @@ Japanese input: "${jaText}"`;
     const addCat = useCallback(async (c) => {
       setCustomCats(prev => [...prev, c]);
       setShowCatAdd(false);
-      await db.upsertCategory(c);
-    }, []);
+      const { error } = await db.upsertCategory(c);
+      if (error) showError(`⚠ カテゴリー保存失敗: ${error.message || String(error)}`);
+    }, [showError]);
 
     const deleteCat = useCallback(async (key) => {
       setCustomCats(prev => prev.filter(c => c.key !== key));
@@ -1447,7 +1470,9 @@ Japanese input: "${jaText}"`;
 
           <div className="stats">
             {filtered.length} フレーズ{search || filterCat !== "all" ? `（絞り込み中 / 全${phrases.length}件）` : ""}
-            {db.ready ? " · Supabase 接続済み ✓" : " · ローカルモード"}
+            {dbStatus === "checking" && " · Supabase 接続確認中..."}
+            {dbStatus === "ok"       && " · Supabase ✅ 保存有効"}
+            {dbStatus === "error"    && <span style={{ color:"var(--pink)" }}> · ⚠ Supabase 未接続 — supabase_setup.sql を実行してください</span>}
           </div>
 
           {filtered.length === 0 ? (
