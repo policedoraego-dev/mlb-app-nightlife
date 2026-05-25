@@ -356,14 +356,16 @@
 <script type="text/babel">
   const { useState, useMemo, useCallback, useEffect, useRef } = React;
 
-  /* ══ Supabase 設定 ══ */
-  const SUPABASE_URL      = "https://gfwlwmyejrdugfhldpqv.supabase.co";
-  const SUPABASE_ANON_KEY = "sb_publishable_kUCDEQeGEyAwbC8GdeGorg_1JPK7n11";
+  /* ══ Supabase 設定 ══
+     localStorage に値があればそちらを優先（設定モーダルで上書き可）
+     未設定の場合はコード内のデフォルト値にフォールバック          */
+  const SUPABASE_URL      = localStorage.getItem("supabase_url")      || "https://gfwlwmyejrdugfhldpqv.supabase.co";
+  const SUPABASE_ANON_KEY = localStorage.getItem("supabase_anon_key") || "sb_publishable_kUCDEQeGEyAwbC8GdeGorg_1JPK7n11";
   const TABLE_NAME        = "phrases_nightlife";
 
   const sb = (() => {
     try {
-      if (!SUPABASE_URL.includes("YOUR") && window.supabase)
+      if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase)
         return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     } catch {}
     return null;
@@ -1230,9 +1232,27 @@ Japanese input: "${jaText}"`;
 
   /* ══ 設定モーダル ══ */
   function SettingsModal({ onClose }) {
-    const [key, setKey] = useState(() => localStorage.getItem("openai_api_key") || "");
-    const save = () => { localStorage.setItem("openai_api_key", key.trim()); onClose(); };
-    const hasKey = !!key.trim();
+    const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem("openai_api_key")   || "");
+    const [sbUrl,     setSbUrl]     = useState(() => localStorage.getItem("supabase_url")      || "");
+    const [sbKey,     setSbKey]     = useState(() => localStorage.getItem("supabase_anon_key") || "");
+
+    const hasOpenai = !!openaiKey.trim();
+    const hasSb     = !!(sbUrl.trim() && sbKey.trim());
+
+    const save = () => {
+      localStorage.setItem("openai_api_key",   openaiKey.trim());
+      /* Supabase 値が変わった場合のみリロード（接続を再初期化するため） */
+      const prevUrl = localStorage.getItem("supabase_url")      || "";
+      const prevKey = localStorage.getItem("supabase_anon_key") || "";
+      const sbChanged = sbUrl.trim() !== prevUrl || sbKey.trim() !== prevKey;
+      if (sbUrl.trim())  localStorage.setItem("supabase_url",      sbUrl.trim());
+      else               localStorage.removeItem("supabase_url");
+      if (sbKey.trim())  localStorage.setItem("supabase_anon_key", sbKey.trim());
+      else               localStorage.removeItem("supabase_anon_key");
+      if (sbChanged) { window.location.reload(); }
+      else           { onClose(); }
+    };
+
     return (
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
@@ -1241,17 +1261,51 @@ Japanese input: "${jaText}"`;
             <button className="modal-close" onClick={onClose}>✕</button>
           </div>
           <div className="modal-body">
+
+            {/* ── Supabase ── */}
+            <span className="form-section-label es" style={{ marginBottom:10 }}>🗄 Supabase 接続設定</span>
             <div className="form-group">
-              <label>OpenAI API キー</label>
-              <input className="form-control settings-key-input" type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="sk-..." />
+              <label>Supabase URL</label>
+              <input className="form-control settings-key-input"
+                type="text" value={sbUrl} onChange={e => setSbUrl(e.target.value)}
+                placeholder="https://xxxxxxxxxx.supabase.co" />
+            </div>
+            <div className="form-group">
+              <label>Supabase ANON KEY</label>
+              <input className="form-control settings-key-input"
+                type="password" value={sbKey} onChange={e => setSbKey(e.target.value)}
+                placeholder="sb_publishable_... または eyJhbG..." />
               <p className="settings-note">
-                設定すると <strong>GPT-4o-mini</strong> で英語・スペイン語の本物ナイトライフスラングに変換し、単語解説も自動生成します。<br/>
-                キーは端末のローカルストレージにのみ保存されます。
+                Supabase ダッシュボード → Project Settings → API から取得。<br/>
+                変更時はページが自動リロードされ接続が再初期化されます。
               </p>
             </div>
-            <div style={{ marginTop:12, padding:"8px 12px", borderRadius:8, background: hasKey ? "rgba(16,163,127,.1)" : "var(--surface)", border:`1px solid ${hasKey ? "#10a37f" : "var(--border)"}`, fontSize:".8rem", color: hasKey ? "#10a37f" : "var(--text-muted)" }}>
-              {hasKey ? "✅ APIキー設定済み — GPTモード有効 (EN + ES)" : "⚠ APIキー未設定 — 通常翻訳モードで動作"}
+            <div style={{ padding:"8px 12px", borderRadius:8, marginBottom:16,
+              background: hasSb ? "rgba(16,163,127,.1)" : "var(--surface)",
+              border:`1px solid ${hasSb ? "#10a37f" : "var(--border)"}`,
+              fontSize:".8rem", color: hasSb ? "#10a37f" : "var(--text-muted)" }}>
+              {hasSb ? "✅ Supabase 設定済み" : "⚠ 未設定 — デフォルト値で接続を試みます"}
             </div>
+
+            {/* ── OpenAI ── */}
+            <span className="form-section-label en" style={{ marginBottom:10 }}>🤖 OpenAI 設定</span>
+            <div className="form-group">
+              <label>OpenAI API キー</label>
+              <input className="form-control settings-key-input"
+                type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)}
+                placeholder="sk-..." />
+              <p className="settings-note">
+                設定すると <strong>GPT-4o-mini</strong> で英語・スペイン語の本物ナイトライフスラングに変換し、単語解説も自動生成します。<br/>
+                すべてのキーは端末のローカルストレージにのみ保存されます。
+              </p>
+            </div>
+            <div style={{ padding:"8px 12px", borderRadius:8,
+              background: hasOpenai ? "rgba(16,163,127,.1)" : "var(--surface)",
+              border:`1px solid ${hasOpenai ? "#10a37f" : "var(--border)"}`,
+              fontSize:".8rem", color: hasOpenai ? "#10a37f" : "var(--text-muted)" }}>
+              {hasOpenai ? "✅ APIキー設定済み — GPTモード有効 (EN + ES)" : "⚠ APIキー未設定 — 通常翻訳モードで動作"}
+            </div>
+
           </div>
           <div className="modal-footer">
             <button className="btn-cancel" onClick={onClose}>閉じる</button>
