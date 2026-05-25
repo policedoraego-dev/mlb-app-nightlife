@@ -694,7 +694,9 @@ Japanese input: "${jaText}"`;
   }
 
   /* ══ 翻訳パネル ══ */
-  function TranslatePanel({ onSaveRequest, speakingId, speak }) {
+  /* onTranslationDone(phraseData) を受け取り、
+     翻訳・AI解析完了後にモーダルを開くよう App に委譲する */
+  function TranslatePanel({ onTranslationDone, speakingId, speak }) {
     const [jaText,   setJaText]   = useState("");
     const [enText,   setEnText]   = useState("");
     const [enStatus, setEnStatus] = useState("idle");
@@ -704,6 +706,11 @@ Japanese input: "${jaText}"`;
     const [saving,   setSaving]   = useState(false);
     const [saveStep, setSaveStep] = useState("");
     const timerRef = useRef(null);
+
+    const clearForm = () => {
+      setJaText(""); setEnText(""); setEnStatus("idle");
+      setEsText(""); setEsStatus("idle"); setErrMsg("");
+    };
 
     useEffect(() => {
       const q = jaText.trim();
@@ -744,12 +751,13 @@ Japanese input: "${jaText}"`;
             const words    = (Array.isArray(r.words)    && r.words.length    > 0) ? r.words    : en.split(/\s+/).filter(Boolean).map(w => ({ w, m:"", r:"", note:"" }));
             const words_es = (Array.isArray(r.words_es) && r.words_es.length > 0) ? r.words_es : es.split(/\s+/).filter(Boolean).map(w => ({ w, m:"", r:"", note:"" }));
             const nuance   = r.nuance || "";
-            setSaveStep("💾 保存中...");
-            onSaveRequest({ ja:jaText.trim(), en, ipa, words, es, ipa_es, words_es, nuance });
+            /* ✅ 直接保存せず、編集モーダルを開く */
+            onTranslationDone({ ja:jaText.trim(), en, ipa, words, es, ipa_es, words_es, nuance });
+            clearForm();
             return;
           } catch (e) {
             const msg = e.message === "no_key" ? "APIキー未設定" : e.message;
-            setSaveStep(`⚠ GPT エラー (${msg})。フォールバック保存...`);
+            setSaveStep(`⚠ GPT エラー (${msg})。フォールバック翻訳で続行...`);
             await new Promise(r => setTimeout(r, 900));
           }
         }
@@ -766,11 +774,11 @@ Japanese input: "${jaText}"`;
         setSaveStep("④ ES 単語解析中..."); let words_es = [];
         try { if (es) words_es = await fetchWordBreakdown(es, "es", /[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+/gi); } catch {}
         if (!words_es.length && es) words_es = es.split(/\s+/).filter(Boolean).map(w => ({ w, m:"", r:"", note:"" }));
-        setSaveStep("💾 保存中...");
-        onSaveRequest({ ja:jaText.trim(), en, ipa, words, es, ipa_es, words_es, nuance:"" });
+        /* ✅ 直接保存せず、編集モーダルを開く */
+        onTranslationDone({ ja:jaText.trim(), en, ipa, words, es, ipa_es, words_es, nuance:"" });
+        clearForm();
       } finally {
         setSaving(false); setSaveStep("");
-        setJaText(""); setEnText(""); setEnStatus("idle"); setEsText(""); setEsStatus("idle");
       }
     };
 
@@ -847,7 +855,9 @@ Japanese input: "${jaText}"`;
 
         <div className="translate-save-row">
           <button className="save-translate-btn" onClick={handleSave} disabled={!jaText.trim() || saving}>
-            {saving ? <><span className="spinner"/>{saveStep || "保存中..."}</> : "💾 フレーズ集に保存"}
+            {saving
+              ? <><span className="spinner"/>{saveStep || "解析中..."}</>
+              : "✏️ 内容確認して保存"}
           </button>
         </div>
       </div>
@@ -1265,6 +1275,7 @@ Japanese input: "${jaText}"`;
     const [detailPhrase,setDetailPhrase]= useState(null);
     const [showCatAdd,  setShowCatAdd]  = useState(false);
     const [showSettings,setShowSettings]= useState(false);
+    const [saveError,   setSaveError]   = useState(""); // Supabase失敗時のトースト
 
     /* いずれかのモーダルが開いていれば body スクロールを止める */
     const anyModalOpen = showAdd || !!detailPhrase || showCatAdd || showSettings;
@@ -1309,26 +1320,51 @@ Japanese input: "${jaText}"`;
       return list;
     }, [phrases, filterCat, search]);
 
+    /* Supabase への保存。エラー時はトーストで通知 */
     const savePhrase = useCallback(async (p) => {
       const now = Date.now();
-      const updated = p.id ? phrases.map(x => x.id === p.id ? p : x) : [...phrases, { ...p, id: now }];
+      const id  = p.id || now;
+      const record = { ...p, id };
+      const updated = p.id
+        ? phrases.map(x => x.id === p.id ? record : x)
+        : [...phrases, record];
       setPhrases(updated);
-      await db.upsertPhrase({ ...p, id: p.id || now });
+      // Supabase 保存（失敗してもUIは維持し、エラーをトーストで表示）
+      if (db.ready) {
+        const row = db._toRow(record);
+        const { error } = await (async () => {
+          try { return await window.supabase
+            .createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+            .from(TABLE_NAME).upsert(row);
+          } catch (e) { return { error: e }; }
+        })();
+        if (error) {
+          setSaveError(`⚠ Supabase 保存失敗: ${error.message || error}。テーブルが作成済みか確認してください。`);
+          setTimeout(() => setSaveError(""), 6000);
+        }
+      }
     }, [phrases]);
 
-    const handleSaveRequest = useCallback(async ({ ja, en, ipa, words, es, ipa_es, words_es, nuance }) => {
-      const newPhrase = {
-        id: Date.now(),
-        phrase: en, ipa: ipa || ("/" + en + "/"),
-        reading: "", meaning: ja,
-        phrase_es: es || "", ipa_es: ipa_es || "",
-        nuance: nuance || "",
-        category: "bar", example: "", tags: [], starred: false,
-        words: words || [],
-        words_es: words_es || [],
+    /* 翻訳パネル完了 → 編集モーダルを開く（カテゴリー等を確認してから保存） */
+    const handleTranslationDone = useCallback(({ ja, en, ipa, words, es, ipa_es, words_es, nuance }) => {
+      const draft = {
+        id: null,           // 新規（未保存）
+        phrase:    en    || "",
+        ipa:       ipa   || ("/" + (en || "") + "/"),
+        reading:   "",
+        meaning:   ja    || "",
+        phrase_es: es    || "",
+        ipa_es:    ipa_es || "",
+        nuance:    nuance || "",
+        category:  "bar", // モーダルで変更可
+        example:   "",
+        tags:      [],
+        starred:   false,
+        words:     words    || [],
+        words_es:  words_es || [],
       };
-      setPhrases(prev => [...prev, newPhrase]);
-      await db.upsertPhrase(newPhrase);
+      setEditPhrase(draft);
+      setShowAdd(true);
     }, []);
 
     const deletePhrase = useCallback(async (id) => {
@@ -1352,6 +1388,14 @@ Japanese input: "${jaText}"`;
     return (
       <>
         {offline && <div className="offline-banner">📡 オフライン — データはローカルに保存されています</div>}
+        {saveError && (
+          <div style={{
+            position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)",
+            background:"#3a0020", border:"1.5px solid var(--pink)", color:"var(--pink)",
+            borderRadius:10, padding:"12px 20px", fontSize:".82rem", zIndex:999,
+            boxShadow:"0 4px 24px rgba(255,79,163,.35)", maxWidth:"90vw", textAlign:"center",
+          }}>{saveError}</div>
+        )}
 
         <div className="header">
           <div className="header-inner">
@@ -1375,7 +1419,7 @@ Japanese input: "${jaText}"`;
         </div>
 
         <div className="main">
-          <TranslatePanel onSaveRequest={handleSaveRequest} speakingId={speakingId} speak={speak} />
+          <TranslatePanel onTranslationDone={handleTranslationDone} speakingId={speakingId} speak={speak} />
           <div className="neon-line" />
 
           <div className="toolbar">
@@ -1428,7 +1472,13 @@ Japanese input: "${jaText}"`;
         {showAdd && (
           <PhraseModal phrase={editPhrase} cats={allCats}
             onClose={() => { setShowAdd(false); setEditPhrase(null); }}
-            onSave={async p => { await savePhrase(p); setShowAdd(false); setEditPhrase(null); }}
+            onSave={async p => {
+              /* 翻訳パネル経由の新規（id:null）はここで id を付与 */
+              const record = { ...p, id: p.id || Date.now() };
+              await savePhrase(record);
+              setShowAdd(false);
+              setEditPhrase(null);
+            }}
           />
         )}
         {detailPhrase && (
