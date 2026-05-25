@@ -393,13 +393,22 @@
     }),
     async loadAll() {
       if (!sb) return null;
-      const [pr, ca] = await Promise.all([
-        sb.from(TABLE_NAME).select("*").order("created_at"),
-        sb.from("categories_nightlife").select("*").order("sort_order").eq("built_in", false).catch(() => ({ data: [] })),
-      ]);
+      /* Supabase v2 では .catch() を直接チェーンできないため
+         async/await + { data, error } パターンに統一          */
+      const { data: phraseRows, error: phraseErr } =
+        await sb.from(TABLE_NAME).select("*").order("created_at");
+      if (phraseErr) {
+        console.warn("[Supabase] loadAll phrases:", phraseErr.message);
+        return null;
+      }
+      const { data: catRows, error: catErr } =
+        await sb.from("categories_nightlife").select("*").order("sort_order").eq("built_in", false);
+      if (catErr) console.warn("[Supabase] loadAll categories:", catErr.message);
       return {
-        phrases: (pr.data || []).map(this._fromRow),
-        customCats: ((ca && ca.data) || []).map(r => ({ key: r.key, label: r.label, paletteIdx: r.palette_idx, builtIn: false })),
+        phrases:    (phraseRows || []).map(this._fromRow),
+        customCats: (catErr ? [] : (catRows || [])).map(r => ({
+          key: r.key, label: r.label, paletteIdx: r.palette_idx, builtIn: false,
+        })),
       };
     },
     async upsertPhrase(p) {
