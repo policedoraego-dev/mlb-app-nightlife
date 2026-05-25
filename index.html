@@ -1411,14 +1411,19 @@ Japanese input: "${jaText}"`;
     }, []);
 
     const savePhrase = useCallback(async (p) => {
+      /* ── id 付与と新規判定はここだけで行う ──
+         onSave 側で id を先に付与してしまうと !p.id が常に false になるため
+         必ず savePhrase に生の p を渡し、ここで id を決定する              */
+      const isNew  = !p.id;                       // null / undefined → 新規
       const id     = p.id || Date.now();
       const record = { ...p, id };
-      const isNew  = !p.id;
+
       /* ① 先に UI を更新（楽観的更新） */
       setPhrases(prev => isNew
-        ? [...prev, record]
-        : prev.map(x => x.id === p.id ? record : x)
+        ? [...prev, record]                        // 新規: 末尾に追加
+        : prev.map(x => x.id === id ? record : x) // 編集: 該当行を差し替え
       );
+
       /* ② Supabase に保存 */
       if (!db.ready) {
         showError("⚠ Supabase 未接続 — ページ再読み込み後にデータが消えます。接続設定を確認してください。");
@@ -1428,7 +1433,7 @@ Japanese input: "${jaText}"`;
       if (error) {
         showError(`⚠ 保存失敗: ${error.message || String(error)} — supabase_setup.sql を Supabase の SQL Editor で実行済みか確認してください。`);
       }
-    }, [phrases, showError]);
+    }, [showError]); /* phrases は関数型 updater を使うので依存不要 */
 
     /* 翻訳パネル完了 → 編集モーダルを開く（カテゴリー等を確認してから保存） */
     const handleTranslationDone = useCallback(({ ja, en, ipa, words, es, ipa_es, words_es, nuance }) => {
@@ -1566,9 +1571,9 @@ Japanese input: "${jaText}"`;
           <PhraseModal phrase={editPhrase} cats={allCats}
             onClose={() => { setShowAdd(false); setEditPhrase(null); }}
             onSave={async p => {
-              /* 翻訳パネル経由の新規（id:null）はここで id を付与 */
-              const record = { ...p, id: p.id || Date.now() };
-              await savePhrase(record);
+              /* id の付与・isNew 判定は savePhrase 内で行うため、
+                 ここでは p をそのまま渡す（先に id を付与しない）  */
+              await savePhrase(p);
               setShowAdd(false);
               setEditPhrase(null);
             }}
