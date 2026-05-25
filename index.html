@@ -1441,7 +1441,8 @@ Japanese input: "${jaText}"`;
         phrase_es: es    || "",
         ipa_es:    ipa_es || "",
         nuance:    nuance || "",
-        category:  "bar", // モーダルで変更可
+        /* 現在のカテゴリーフィルターが "all" 以外ならそれをデフォルトに */
+        category:  filterCat !== "all" ? filterCat : "bar",
         example:   "",
         tags:      [],
         starred:   false,
@@ -1450,7 +1451,7 @@ Japanese input: "${jaText}"`;
       };
       setEditPhrase(draft);
       setShowAdd(true);
-    }, []);
+    }, [filterCat]);
 
     const deletePhrase = useCallback(async (id) => {
       if (!confirm("このフレーズを削除しますか？")) return;
@@ -1513,7 +1514,11 @@ Japanese input: "${jaText}"`;
               <span className="search-icon">🔍</span>
               <input className="search-input" placeholder="フレーズ・スペイン語・意味・タグで検索..." value={search} onChange={e => setSearch(e.target.value)} />
             </div>
-            <button className="add-btn" onClick={() => { setEditPhrase(null); setShowAdd(true); }}>＋ 追加</button>
+            <button className="add-btn" onClick={() => {
+              /* カテゴリーフィルターが絞り込み中ならそのカテゴリーをデフォルトにする */
+              setEditPhrase(filterCat !== "all" ? { category: filterCat } : null);
+              setShowAdd(true);
+            }}>＋ 追加</button>
           </div>
 
           <div className="filter-row">
